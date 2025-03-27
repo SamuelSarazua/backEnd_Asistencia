@@ -1,0 +1,25 @@
+{
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "mysql2": "^3.14.0"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "name": "backend_asistencia",
+  "description": "",
+  "version": "1.0.0",
+  "main": "server.js",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SamuelSarazua/backEnd_Asistencia.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/SamuelSarazua/backEnd_Asistencia/issues"
+  },
+  "homepage": "https://github.com/SamuelSarazua/backEnd_Asistencia#readme"
+}
