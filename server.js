@@ -4,22 +4,19 @@ const cors = require('cors');
 
 const app = express();
 
+// Middleware CORS
 app.use(cors({
-    origin: [
-        'http://localhost:3000',
-        'http://127.0.0.1:3000',
-        'http://localhost:5500',
-        'http://127.0.0.1:5500'
-    ],
+    origin: '*', // Temporalmente permite todos los orígenes
     methods: ['GET', 'POST', 'PUT', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
     credentials: true
 }));
 
-// Middleware para analizar JSON
+// Middleware para JSON
 app.use(express.json());
+app.use(express.static(__dirname + '/public'));
 
-// Configuración de la conexión a MySQL
+// Configuración de la conexión MySQL
 const pool = mysql.createPool({
     host: 'localhost',
     user: 'root',
@@ -27,68 +24,65 @@ const pool = mysql.createPool({
     database: 'examen_Laboratorio'
 });
 
-// Verifica primero la conexión a la base de datos
+// Verificar la conexión
 pool.getConnection()
   .then(connection => {
-    console.log('✅ Conexión a MySQL establecida correctamente');
+    console.log('✅ Conexión a MySQL establecida');
     connection.release();
   })
   .catch(err => {
-    console.error('❌ Error al conectar a MySQL:', err);
+    console.error('❌ Error de conexión:', err);
   });
 
+// Función de manejo de errores
+function handleError(res, error, message = 'Error en el servidor') {
+    console.error(error);
+    res.status(500).json({
+        success: false,
+        error: message,
+        details: process.env.NODE_ENV === 'development' ? error.message : undefined
+    });
+}
 
-  //CONSULTA DE REGISTRO
+// Middleware para validar parámetro "grado_id" y "fecha"
+function validateGradoFecha(req, res, next) {
+    const { grado_id, fecha } = req.query;
+    if (!grado_id || !fecha) {
+        return res.status(400).json({
+            success: false,
+            error: "Los parámetros grado_id y fecha son requeridos"
+        });
+    }
+    next();
+}
+
+// Ruta de registro
 app.post('/registro', async (req, res) => {
     const { nombre, apellido, correo, contrasena } = req.body;
-
     if (!nombre || !apellido || !correo || !contrasena) {
-        return res.status(400).json({ 
-            success: false,
-            error: "Todos los campos son obligatorios" 
-        });
+        return res.status(400).json({ success: false, error: "Todos los campos son obligatorios" });
     }
 
     try {
-        // Consulta SQL modificada para omitir ID_Profesor si no es necesario
         const [result] = await pool.query(
             'INSERT INTO profesores (Nombre, Apellido, Correo, contrasena) VALUES (?, ?, ?, ?)',
             [nombre, apellido, correo, contrasena]
         );
-
-        res.json({ 
+        res.json({
             success: true,
-            mensaje: "Usuario registrado exitosamente",
+            mensaje: "Usuario registrado",
             id: result.insertId
         });
     } catch (err) {
-        console.error("❌ Error al registrar:", err);
-        
-        let mensajeError = "Error al registrar usuario";
-        if (err.code === 'ER_DUP_ENTRY') {
-            mensajeError = "El correo electrónico ya está registrado";
-        } else if (err.code === 'ER_NO_DEFAULT_FOR_FIELD') {
-            mensajeError = "Problema con la estructura de la base de datos";
-        }
-
-        res.status(500).json({ 
-            success: false,
-            error: mensajeError,
-            details: err.sqlMessage || err.message
-        });
+        handleError(res, err, "Error al registrar usuario");
     }
 });
 
-
-// CONSULTA DE LOGIN
+// Ruta de login
 app.post('/login', async (req, res) => {
     const { usuario, contrasena } = req.body;
-
     if (!usuario || !contrasena) {
-        return res.status(400).json({ 
-            success: false,
-            error: "Usuario y contraseña son requeridos" 
-        });
+        return res.status(400).json({ success: false, error: "Usuario y contraseña son requeridos" });
     }
 
     try {
@@ -98,17 +92,11 @@ app.post('/login', async (req, res) => {
         );
 
         if (profesores.length === 0) {
-            return res.status(401).json({ 
-                success: false,
-                error: "Credenciales incorrectas" 
-            });
+            return res.status(401).json({ success: false, error: "Credenciales incorrectas" });
         }
 
         const profesor = profesores[0];
-        
-        // Asegúrate de enviar una respuesta JSON válida
-        res.setHeader('Content-Type', 'application/json');
-        res.status(200).json({
+        res.json({
             success: true,
             profesor: {
                 id: profesor.id,
@@ -119,42 +107,55 @@ app.post('/login', async (req, res) => {
             mensaje: "Inicio de sesión exitoso"
         });
     } catch (err) {
-        console.error("❌ Error en login:", err);
-        // Asegúrate de enviar una respuesta JSON incluso en errores
-        res.setHeader('Content-Type', 'application/json');
-        res.status(500).json({ 
-            success: false,
-            error: "Error en el servidor",
-            details: process.env.NODE_ENV === 'development' ? err.message : undefined
-        });
+        handleError(res, err, "Error en el login");
     }
-});     
+});
 
-
-//CONSULTA DE GRADOS DE IMPRESION
+// Agrega esta ruta antes de iniciar el servidor
 app.get('/grados', async (req, res) => {
     try {
-        const [grados] = await pool.query(
-            'SELECT id, Nombre_Grado FROM grados ORDER BY Nombre_Grado' // Corregido el nombre de la tabla
-        );
-        
-        res.json({
-            success: true,
-            grados
+        const [grados] = await pool.query('SELECT id, Nombre_Grado FROM grados');
+        res.json({ 
+            success: true, 
+            grados 
         });
     } catch (err) {
-        console.error("Error al obtener grados:", err);
-        res.status(500).json({
+        handleError(res, err, "Error al obtener los grados");
+    }
+});
+
+// Ruta para obtener un grado específico
+app.get('/grados/:id', async (req, res) => {
+    try {
+        const [rows] = await pool.query(
+            'SELECT id, Nombre_Grado FROM grados WHERE id = ?', 
+            [req.params.id]
+        );
+        
+        if (rows.length === 0) {
+            return res.status(404).json({ success: false, error: "Grado no encontrado" });
+        }
+        
+        res.json({ 
+            success: true,
+            grado: {
+                id: rows[0].id,
+                Nombre_Grado: rows[0].Nombre_Grado
+            }
+        });
+    } catch (err) {
+        console.error("Error en /grados/:id:", err);
+        res.status(500).json({ 
             success: false,
-            error: "Error al consultar la base de datos"
+            error: "Error al obtener el grado",
+            details: err.message
         });
     }
 });
 
-
-//CONSULTA DE ALUMNOS
-app.get('/alumnos', async (req, res) => {
-    const { grado_id, fecha } = req.query; // Añadir fecha como parámetro requerido
+// Ruta para obtener alumnos con asistencia
+app.get('/alumnos-asistencia', async (req, res) => {
+    const { grado_id, fecha } = req.query;
 
     if (!grado_id || !fecha) {
         return res.status(400).json({ 
@@ -164,8 +165,68 @@ app.get('/alumnos', async (req, res) => {
     }
 
     try {
-        // Verificar si el grado existe
-        const [grados] = await pool.query('SELECT id, Nombre_Grado FROM grados WHERE id = ?', [grado_id]);
+        // Verificar que el grado existe
+        const [grado] = await pool.query(
+            'SELECT Nombre_Grado FROM grados WHERE id = ?',
+            [grado_id]
+        );
+        
+        if (grado.length === 0) {
+            return res.status(404).json({ 
+                success: false,
+                error: "El grado especificado no existe"
+            });
+        }
+
+        // Obtener alumnos con estado de asistencia
+        const [alumnos] = await pool.query(
+            `SELECT 
+                a.id,
+                a.ID_Alumno,
+                a.Nombre,
+                a.Apellido,
+                IFNULL(asi.Estado, 'Ausente') AS Estado
+             FROM alumnos a
+             LEFT JOIN asistencia asi ON a.ID_Alumno = asi.ID_Alumno AND asi.Fecha = ?
+             WHERE a.ID_Grado = ?
+             ORDER BY a.Apellido, a.Nombre`,
+            [fecha, grado_id]
+        );
+
+        res.json({
+            success: true,
+            grado: grado[0].Nombre_Grado,
+            fecha: fecha,
+            alumnos: alumnos
+        });
+    } catch (err) {
+        console.error("Error en /alumnos-asistencia:", err);
+        res.status(500).json({ 
+            success: false,
+            error: "Error al obtener alumnos",
+            details: err.message
+        });
+    }
+});
+
+app.get('/alumnos', async (req, res) => {
+    const { grado_id, fecha } = req.query;
+
+    if (!grado_id) {
+        return res.status(400).json({
+            success: false,
+            error: "El parámetro grado_id es requerido"
+        });
+    }
+
+    try {
+        const fechaAsistencia = fecha || new Date().toISOString().split('T')[0];
+        
+        // 1. Obtener información del grado
+        const [grados] = await pool.query(
+            'SELECT id, Nombre_Grado FROM grados WHERE id = ?',
+            [grado_id]
+        );
         
         if (grados.length === 0) {
             return res.status(404).json({
@@ -174,7 +235,7 @@ app.get('/alumnos', async (req, res) => {
             });
         }
 
-        // Obtener alumnos con información de asistencia
+        // 2. Obtener alumnos con su estado de asistencia
         const [alumnos] = await pool.query(
             `SELECT 
                 a.id, 
@@ -187,276 +248,92 @@ app.get('/alumnos', async (req, res) => {
                 AND asist.Fecha = ?
              WHERE a.ID_Grado = ?
              ORDER BY a.Apellido ASC, a.Nombre ASC`,
-            [fecha, grado_id]
+            [fechaAsistencia, grado_id]
         );
 
         res.json({
             success: true,
             grado: grados[0].Nombre_Grado,
-            fecha: fecha,
+            fecha: fechaAsistencia,
             alumnos: alumnos
         });
     } catch (err) {
         console.error("Error al obtener alumnos:", err);
-        res.status(500).json({ 
+        res.status(500).json({
             success: false,
             error: "Error al obtener alumnos",
-            details: process.env.NODE_ENV === 'development' ? err.message : undefined
+            details: err.message
         });
     }
 });
-
-//CONSULTA DE ASISTENCIAS
 
 app.post('/asistencia', async (req, res) => {
     const { alumno_id, fecha, estado } = req.body;
 
-    // Validaciones adicionales
-    if (!alumno_id || !fecha || !estado) {
-        return res.status(400).json({ 
-            success: false,
-            error: "Todos los campos son obligatorios" 
-        });
-    }
-
-    // Validar que el estado sea correcto
-    const estadosValidos = ['Presente', 'Ausente'];
-    if (!estadosValidos.includes(estado)) {
-        return res.status(400).json({ 
-            success: false,
-            error: "Estado de asistencia inválido" 
-        });
-    }
-
-    try {
-        // Verificar si el alumno existe
-        const [alumnos] = await pool.query('SELECT id FROM alumnos WHERE ID_Alumno = ?', [alumno_id]);
-        if (alumnos.length === 0) {
-            return res.status(404).json({ 
-                success: false,
-                error: "El alumno especificado no existe" 
-            });
-        }
-
-        // Verificar si ya existe registro para esta fecha
-        const [existente] = await pool.query(
-            `SELECT id FROM asistencia 
-             WHERE ID_Alumno = ? AND Fecha = ?`,
-            [alumno_id, fecha]
-        );
-
-        if (existente.length > 0) {
-            // Actualizar registro existente
-            await pool.query(
-                `UPDATE asistencia 
-                 SET Estado = ? 
-                 WHERE id = ?`,
-                [estado, existente[0].id]
-            );
-        } else {
-            // Insertar nuevo registro
-            await pool.query(
-                `INSERT INTO asistencia 
-                 (ID_Alumno, Fecha, Estado) 
-                 VALUES (?, ?, ?)`,
-                [alumno_id, fecha, estado]
-            );
-        }
-
-        res.json({
-            success: true,
-            message: "Asistencia registrada correctamente"
-        });
-    } catch (err) {
-        console.error("Error al registrar asistencia:", err);
-        res.status(500).json({ 
-            success: false,
-            error: "Error al registrar asistencia",
-            details: err.sqlMessage 
-        });
-    }
-});
-
-// Endpoint para obtener alumnos con asistencia por grado y fecha
-app.get('/alumnos-asistencia', async (req, res) => {
-    const { grado_id, fecha } = req.query;
-
-    if (!grado_id || !fecha) {
-        return res.status(400).json({ 
-            success: false,
-            error: "Se requieren grado_id y fecha" 
-        });
-    }
-
-    try {
-        // Verificar si el grado existe
-        const [grados] = await pool.query(
-            'SELECT id, Nombre_Grado FROM grados WHERE id = ?', 
-            [grado_id]
-        );
-
-        if (grados.length === 0) {
-            return res.status(404).json({
-                success: false,
-                error: "Grado no encontrado"
-            });
-        }
-
-        // Obtener alumnos con estado de asistencia
-        const [alumnos] = await pool.query(
-            `SELECT 
-                a.id,
-                a.ID_Alumno,
-                a.Nombre,
-                a.Apellido,
-                IFNULL(asist.Estado, 'Ausente') AS Estado
-             FROM alumnos a
-             LEFT JOIN asistencia asist ON a.ID_Alumno = asist.ID_Alumno AND asist.Fecha = ?
-             WHERE a.ID_Grado = ?
-             ORDER BY a.Apellido, a.Nombre`,
-            [fecha, grado_id]
-        );
-
-        res.json({
-            success: true,
-            grado: grados[0].Nombre_Grado,
-            fecha: fecha,
-            alumnos: alumnos
-        });
-
-    } catch (error) {
-        console.error("Error en /alumnos-asistencia:", error);
-        res.status(500).json({
-            success: false,
-            error: "Error al obtener alumnos",
-            details: error.message
-        });
-    }
-});
-
-// Endpoint para registrar/actualizar asistencia
-app.post('/registrar-asistencia', async (req, res) => {
-    const { alumno_id, fecha, estado } = req.body;
-
     // Validaciones
-    if (!alumno_id || !fecha || !estado) {
-        return res.status(400).json({
+    if (!alumno_id || isNaN(alumno_id)) {
+        return res.status(400).json({ 
             success: false,
-            error: "Todos los campos son obligatorios"
+            error: "ID de alumno inválido" 
         });
     }
 
-    if (!['Presente', 'Ausente'].includes(estado)) {
-        return res.status(400).json({
-            success: false,
-            error: "Estado de asistencia inválido"
-        });
-    }
-
+    let connection;
     try {
-        // Verificar si el alumno existe
-        const [alumnos] = await pool.query(
-            'SELECT id FROM alumnos WHERE ID_Alumno = ?',
+        connection = await pool.getConnection();
+        
+        // Obtener ID_Alumno correspondiente
+        const [alumno] = await connection.query(
+            'SELECT ID_Alumno FROM alumnos WHERE id = ?',
             [alumno_id]
         );
 
-        if (alumnos.length === 0) {
-            return res.status(404).json({
+        if (alumno.length === 0) {
+            return res.status(404).json({ 
                 success: false,
-                error: "Alumno no encontrado"
+                error: "Alumno no encontrado" 
             });
         }
 
-        // Verificar si ya existe registro
-        const [registros] = await pool.query(
-            'SELECT id FROM asistencia WHERE ID_Alumno = ? AND Fecha = ?',
-            [alumno_id, fecha]
+        const idAlumno = alumno[0].ID_Alumno;
+
+        // Insertar asistencia (sin mencionar ID_Asistencia)
+        const [result] = await connection.query(
+            `INSERT INTO asistencia (ID_Alumno, Fecha, Estado)
+             VALUES (?, ?, ?)`,
+            [idAlumno, fecha, estado]
         );
 
-        if (registros.length > 0) {
-            // Actualizar registro existente
-            await pool.query(
-                'UPDATE asistencia SET Estado = ? WHERE id = ?',
-                [estado, registros[0].id]
-            );
-        } else {
-            // Crear nuevo registro
-            await pool.query(
-                'INSERT INTO asistencia (ID_Alumno, Fecha, Estado) VALUES (?, ?, ?)',
-                [alumno_id, fecha, estado]
-            );
-        }
-
-        res.json({
+        res.json({ 
             success: true,
-            message: "Asistencia registrada correctamente"
+            message: "Asistencia registrada correctamente",
+            data: {
+                insertId: result.insertId
+            }
         });
 
-    } catch (error) {
-        console.error("Error en /registrar-asistencia:", error);
-        res.status(500).json({
-            success: false,
-            error: "Error al registrar asistencia",
-            details: error.message
+    } catch (err) {
+        console.error("Error en la base de datos:", {
+            message: err.message,
+            code: err.code,
+            sqlMessage: err.sqlMessage,
+            sql: err.sql
         });
-    }
-});
-
-// En tu server.js (backend)
-app.get('/alumnos-por-grado', async (req, res) => {
-    const { grado_id } = req.query;
-
-    if (!grado_id) {
-        return res.status(400).json({ 
-            success: false,
-            error: "El parámetro grado_id es requerido" 
-        });
-    }
-
-    try {
-        // Verificar si el grado existe
-        const [grados] = await pool.query(
-            'SELECT id, Nombre_Grado FROM grados WHERE id = ?', 
-            [grado_id]
-        );
-
-        if (grados.length === 0) {
-            return res.status(404).json({
-                success: false,
-                error: "El grado especificado no existe"
-            });
-        }
-
-        // Obtener alumnos del grado
-        const [alumnos] = await pool.query(
-            `SELECT 
-                id,
-                ID_Alumno,
-                Nombre,
-                Apellido
-             FROM alumnos 
-             WHERE ID_Grado = ?
-             ORDER BY Apellido ASC, Nombre ASC`,
-            [grado_id]
-        );
-
-        res.json({
-            success: true,
-            grado: grados[0].Nombre_Grado,
-            alumnos: alumnos
-        });
-
-    } catch (error) {
-        console.error("Error al obtener alumnos:", error);
+        
         res.status(500).json({ 
             success: false,
-            error: "Error al obtener alumnos",
-            details: error.message
+            error: "Error en el servidor",
+            details: process.env.NODE_ENV === 'development' ? {
+                code: err.code,
+                sqlMessage: err.sqlMessage
+            } : undefined
         });
+    } finally {
+        if (connection) connection.release();
     }
 });
 
-// Iniciar servidor
+// Iniciar el servidor
 const PORT = 3000;
 app.listen(PORT, () => {
     console.log(`🚀 Servidor corriendo en http://localhost:${PORT}`);
